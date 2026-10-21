@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import mimetypes
 from pathlib import Path
 import tempfile
 import threading
@@ -33,6 +34,22 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(len(result['boards']), 2)
         self.assertTrue(result['boards'][0]['cards'][0]['dueComplete'])
         self.assertEqual(result['boards'][0]['cards'][0]['labels'][0]['name'],'Deadline')
+
+    def test_scripts_keep_javascript_content_type_with_wrong_system_associations(self):
+        mimetypes.init()
+        http = server.ThreadingHTTPServer(('127.0.0.1', 0), server.Handler)
+        threading.Thread(target=http.serve_forever, daemon=True).start()
+        root = f'http://127.0.0.1:{http.server_port}'
+        try:
+            # Windows registry/file associations can override Python defaults.
+            with patch.dict(mimetypes.types_map, {'.js': 'text/plain', '.mjs': 'application/octet-stream'}):
+                for path in ('/app.js', '/updates.js', '/timeline.mjs'):
+                    with self.subTest(path=path), urlopen(root + path) as response:
+                        self.assertEqual(response.headers.get_content_type(), 'text/javascript')
+                        self.assertEqual(response.headers['X-Content-Type-Options'], 'nosniff')
+        finally:
+            http.shutdown()
+            http.server_close()
 
     def test_http_blocks_cross_origin_and_serves_no_secrets(self):
         http = server.ThreadingHTTPServer(('127.0.0.1', 0), server.Handler)

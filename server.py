@@ -80,6 +80,16 @@ def roadmap(workspace):
 
 
 class Handler(SimpleHTTPRequestHandler):
+    # Serve modules consistently even when Windows registry MIME associations
+    # override Python defaults. Browsers enforce module MIME types strictly.
+    extensions_map = {
+        **SimpleHTTPRequestHandler.extensions_map,
+        '.js': 'text/javascript',
+        '.mjs': 'text/javascript',
+        '.css': 'text/css',
+        '.html': 'text/html',
+    }
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(ROOT / 'public'), **kwargs)
 

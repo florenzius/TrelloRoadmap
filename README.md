@@ -47,6 +47,10 @@ Trello Roadmap checks GitHub when opened, caches results for 15 minutes, and dis
 
 To update, preserve any local changes, then run `git pull --ff-only` or clone a fresh checkout. **Restart the Python server** and refresh the browser. Browser refresh alone cannot reload server changes. A fresh clone needs the ignored `.local/` directory copied separately to preserve the connection on the same Windows account.
 
+## Troubleshooting
+
+If buttons do nothing and the footer stays on “Loading build information…”, check the browser console for a module MIME-type error. Older versions relied on system file associations for `.js` and `.mjs`; some Windows installations return a non-JavaScript type, which browsers block. Update the checkout, stop and restart the Python server, then refresh the browser with Ctrl+F5. The server now sets these content types explicitly.
+
 ## Development
 
 ```powershell
