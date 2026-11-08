@@ -138,3 +138,5 @@ main{display:flex;flex-direction:column;flex:1;min-height:0;padding:18px 38px 20
 #minimap-fit{font-size:10px;padding:5px 8px}
 
 .sprint-copy{overflow:hidden}.sprint-copy .card-name{white-space:nowrap;text-overflow:ellipsis;overflow:hidden}
+
+#setup{max-height:85dvh;overflow:auto}

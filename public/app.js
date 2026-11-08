@@ -1,5 +1,5 @@
 import './updates.js';
-import {interval,dayNumber,dateFromDay,packCards,safeTrelloUrl,deadlineDay,deadlinePosition,cardGeometry,placeEntries,memberDisplayName,timePosition,timedInterval,minimapLayout,blockerInterval,markerLabelLayout,cardKind,defaultClassification} from './timeline.mjs';
+import {interval,dayNumber,dateFromDay,packCards,safeTrelloUrl,safePlankaUrl,deadlineDay,deadlinePosition,cardGeometry,placeEntries,memberDisplayName,timePosition,timedInterval,minimapLayout,blockerInterval,markerLabelLayout,cardKind,defaultClassification} from './timeline.mjs';
 const $ = selector => document.querySelector(selector);
 let today = dayNumber(new Date());
 const palette = ['#5cbf94','#dcaa60','#729fee','#bf8be0','#e58194','#65beca'];
@@ -14,6 +14,13 @@ preferences.colors ||= {}; preferences.hidden ||= {};
 preferences.aliases ||= {};
 preferences.minimapRanges ||= {};
 let boards = [], demo = false, connected = false, loading = false, generation = 0;
+let provider=preferences.provider==='planka'?'planka':'trello';
+let savedConnections={trello:false,planka:false},plankaUrl='';
+preferences.plankaProjects ||= {};
+const sourceName=(source=provider)=>source==='planka'?'Planka':'Trello';
+const rememberedWorkspace=()=>provider==='planka'?preferences.plankaProjects[plankaUrl]:preferences.workspace;
+const workspaceKey=()=>provider==='planka'?'planka:'+plankaUrl+':':'';
+
 let minimapDeadlineMarkers=[];
 let minimapSprints=[];
 let classification=defaultClassification();
@@ -59,11 +66,12 @@ function cardDetails(card,board,range) {
 }
 
 function entryLink(card,className,description) {
-  const href=safeTrelloUrl(card.url),entry=node(href?'a':'div',className+(card.dueComplete?' completed':''));
+  const href=provider==='planka'?safePlankaUrl(card.url,plankaUrl):safeTrelloUrl(card.url);
+  const entry=node(href?'a':'div',className+(card.dueComplete?' completed':''));
   if(href){entry.href=href;entry.target='_blank';entry.rel='noopener noreferrer';}
   else entry.tabIndex=0;
   entry.title=description;
-  entry.setAttribute('aria-label',description+(href?' · Open in Trello':''));
+  entry.setAttribute('aria-label',description+(href?' · Open in '+sourceName():''));
   return entry;
 }
 
@@ -129,7 +137,7 @@ function renderPicker() {
   }
 }
 
-const minimapKey=()=>demo?'__demo__':$('#workspace').value||preferences.workspace||'__default__';
+const minimapKey=()=>demo?'__demo__':workspaceKey()+($('#workspace').value||rememberedWorkspace()||'__default__');
 function loadedCardDates(){
   let start=Infinity,end=-Infinity;
   for(const board of boards)for(const card of board.cards){
@@ -254,7 +262,7 @@ function render() {
   $('#period').textContent=format(anchor,{month:'long',year:'numeric'}) + (format(anchor,{month:'long'})!==format(end,{month:'long'})?' – '+format(end,{month:'short',year:'numeric'}):'');
   const timeline=$('#timeline');timeline.replaceChildren();
   if (!visible.length && !deadlines.length && !blockers.length && !sprints.length) {
-    const empty=node('div','empty');empty.append(node('h3','',loading?'Loading roadmap …':boards.length?'All boards are hidden':connected?'No boards loaded yet':'Your boards. One shared plan.'),node('p','',boards.length?'Use “Boards” to show them again.':connected?'Select a workspace with active boards.':'Connect Trello or explore sample data.'));timeline.append(empty);$('#card-count').textContent='';return;
+    const empty=node('div','empty');empty.append(node('h3','',loading?'Loading roadmap …':boards.length?'All boards are hidden':connected?'No boards loaded yet':'Your boards. One shared plan.'),node('p','',boards.length?'Use “Boards” to show them again.':connected?'Select a '+(provider==='planka'?'project':'workspace')+' with active boards.':'Connect Trello or Planka, or explore sample data.'));timeline.append(empty);$('#card-count').textContent='';return;
   }
   const head=node('div','timeline-head');head.style.width=`calc(var(--label) + ${gridWidth}px)`;head.append(node('div','corner','BOARDS / '+visible.length));
   const dates=node('div','dates');dates.style.width=gridWidth+'px';
@@ -330,27 +338,72 @@ async function loadWorkspace() {
   const version=++generation;
   const workspace=$('#workspace').value;
   if(!workspace)return;
-  preferences.workspace=workspace;save();loading=true;boards=[];render();notice('Loading boards and dates from Trello …');
+  if(provider==='planka')preferences.plankaProjects[plankaUrl]=workspace;
+  else preferences.workspace=workspace;
+  save();loading=true;boards=[];render();notice('Loading boards and dates from '+sourceName()+' …');
   try {
-    const result=await api('/api/roadmap?workspace='+encodeURIComponent(workspace));
+    const result=await api('/api/roadmap?'+new URLSearchParams({provider,workspace}));
     if(version!==generation)return;
     if(result.boards.some(board=>board.cards.some(card=>!Array.isArray(card.labels)))){
-      throw new Error('The local server is missing Trello labels. Restart the Roadmap server and refresh to correctly detect blockers and deadlines.');
+      throw new Error('Card labels are missing. Restart the Roadmap server and refresh.');
     }
-    boards=result.boards;notice('');
+    boards=result.boards;
+    const invalid=result.invalidStarts;
+    notice(invalid?invalid+' Planka '+(invalid===1?'card has':'cards have')+' an invalid or ambiguous start date. Use one DD.MM.YYYY value in Startdatum → Datum (DD.MM.YYYY).':'',Boolean(invalid));
   } catch(error){if(version===generation)notice(error.message,true);}
   finally{if(version===generation){loading=false;renderPicker();render();}}
 }
-async function loadWorkspaces() {
-  const version=generation;
-  const workspaces=await api('/api/workspaces');
-  if(version!==generation||demo)return;
-  $('#workspace').replaceChildren();
-  for(const workspace of workspaces){const option=node('option','',workspace.displayName||workspace.name);option.value=workspace.id;$('#workspace').append(option);}
-  if(workspaces.some(workspace=>workspace.id===preferences.workspace))$('#workspace').value=preferences.workspace;
-  if(workspaces.length)await loadWorkspace();else notice('No workspaces were found for this Trello account.');
+
+function setConnectionStatus(status){
+  savedConnections=status.providers||{trello:status.connected,planka:false};
+  plankaUrl=status.plankaUrl||'';
 }
-function setup(){$('#disconnect').hidden=!connected;$('#setup-error').hidden=true;$('#setup').showModal();}
+
+async function useProvider(source){
+  provider=source;preferences.provider=source;save();
+  connected=savedConnections[source];demo=false;boards=[];loading=connected;
+  const version=++generation,project=source==='planka',name=sourceName();
+  $('#workspace-label').textContent=project?'PROJECT':'WORKSPACE';
+  $('#workspace').setAttribute('aria-label',project?'Project':'Workspace');
+  $('#workspace').replaceChildren(node('option','',connected?'Loading …':'Connect '+name+' …'));
+  $('#workspace').disabled=true;
+  $('#connection-label').textContent=connected?name+' connected · read-only':'Local · read-only';
+  $('#footer-hint').textContent=connected?'Click a card to open it in '+name:'Connect a board source';
+  notice('');renderPicker();render();
+  if(!connected)return;
+  try {
+    const workspaces=await api('/api/workspaces?provider='+source);
+    if(version!==generation)return;
+    const select=$('#workspace');select.replaceChildren();
+    for(const workspace of workspaces){
+      const option=node('option','',workspace.displayName||workspace.name);option.value=workspace.id;select.append(option);
+    }
+    if(workspaces.some(workspace=>workspace.id===rememberedWorkspace()))select.value=rememberedWorkspace();
+    if(workspaces.length){select.disabled=false;await loadWorkspace();}
+    else {
+      select.append(node('option','','No '+(project?'projects':'workspaces')));
+      notice('No '+(project?'projects':'workspaces')+' were found for this '+name+' account.');
+    }
+  }catch(error){if(version===generation)notice(error.message,true);}
+  finally{if(version===generation){loading=false;render();}}
+}
+
+function updateSetup(resetUrl=false){
+  const source=$('#connection-provider').value,project=source==='planka',saved=savedConnections[source];
+  $('#trello-connection').hidden=project;$('#planka-connection').hidden=!project;
+  for(const id of ['#api-key','#api-token'])$(id).disabled=project;
+  for(const id of ['#planka-url','#planka-key'])$(id).disabled=!project;
+  $('#planka-url').required=project;
+  if(resetUrl)$('#planka-url').value=plankaUrl;
+  $('#disconnect').hidden=!saved;$('#saved-connection').hidden=!saved;
+  $('#setup-error').hidden=true;
+  $('#connect').textContent=(saved?'Use ':'Connect ')+sourceName(source)+' →';
+}
+function setup(){
+  $('#connection-provider').value=provider;
+  updateSetup(true);$('#setup').showModal();
+}
+$('#connection-provider').addEventListener('change',()=>updateSetup());
 $('#settings-button').addEventListener('click',setup);
 $('#close-setup').addEventListener('click',()=>$('#setup').close());
 // Only dismiss a backdrop gesture when it starts and ends outside the dialog.
@@ -433,15 +486,53 @@ $('#today').addEventListener('click',()=>{today=dayNumber(new Date());anchor=tod
 $('#previous').addEventListener('click',()=>{anchor-=zoom==='days'?14:zoom==='weeks'?28:90;render();$('#timeline-scroll').scrollLeft=0;});
 $('#next').addEventListener('click',()=>{anchor+=zoom==='days'?14:zoom==='weeks'?28:90;render();$('#timeline-scroll').scrollLeft=0;});
 document.querySelectorAll('[data-zoom]').forEach(button=>button.addEventListener('click',()=>{zoom=button.dataset.zoom;save();render();$('#timeline-scroll').scrollLeft=0;}));
-$('#authorize').addEventListener('click',()=>{const key=$('#api-key').value.trim();if(!/^[a-f\d]{32}$/i.test(key)){$('#setup-error').textContent='Enter a valid API key first.';$('#setup-error').hidden=false;return;}const query=new URLSearchParams({key,name:'Trello Roadmap',scope:'read',expiration:'never',response_type:'token'});window.open('https://trello.com/1/authorize?'+query,'_blank','noopener,noreferrer');});
+$('#authorize').addEventListener('click',()=>{const key=$('#api-key').value.trim();if(!/^[a-f\d]{32}$/i.test(key)){$('#setup-error').textContent='Enter a valid API key first.';$('#setup-error').hidden=false;return;}const query=new URLSearchParams({key,name:'Kanban Roadmapper',scope:'read',expiration:'never',response_type:'token'});window.open('https://trello.com/1/authorize?'+query,'_blank','noopener,noreferrer');});
+function connectionBusy(busy){
+  for(const id of ['#connect','#disconnect','#connection-provider','#demo'])$(id).disabled=busy;
+}
+function connectionError(error){
+  if($('#setup').open){$('#setup-error').textContent=error.message;$('#setup-error').hidden=false;}
+  else notice(error.message,true);
+}
 $('#connection-form').addEventListener('submit',async event=>{
-  event.preventDefault();$('#connect').disabled=true;$('#connect').textContent='Checking connection …';$('#setup-error').hidden=true;
-  try{await api('/api/connect',{key:$('#api-key').value,token:$('#api-token').value});$('#api-key').value='';$('#api-token').value='';connected=true;demo=false;$('#setup').close();$('#connection-label').textContent='Trello connected · read-only';$('#footer-hint').textContent='Click a card to open it in Trello';await loadWorkspaces();}
-  catch(error){if($('#setup').open){$('#setup-error').textContent=error.message;$('#setup-error').hidden=false;}else notice(error.message,true);}
-  finally{$('#connect').disabled=false;$('#connect').textContent='Connect Trello →';}
+  event.preventDefault();
+  const source=$('#connection-provider').value;
+  const payload=source==='planka'
+    ? {provider:source,url:$('#planka-url').value.trim(),key:$('#planka-key').value.trim()}
+    : {provider:source,key:$('#api-key').value.trim(),token:$('#api-token').value.trim()};
+  const reuse=savedConnections[source]&&!payload.key&&!payload.token&&
+    (source==='trello'||payload.url.replace(/\/+$/,'')===plankaUrl);
+  connectionBusy(true);$('#connect').textContent='Checking connection …';$('#setup-error').hidden=true;
+  try {
+    if(!reuse)setConnectionStatus(await api('/api/connect',payload));
+    for(const id of ['#api-key','#api-token','#planka-key'])$(id).value='';
+    $('#setup').close();await useProvider(source);
+  }catch(error){connectionError(error);}
+  finally{
+    connectionBusy(false);
+    $('#connect').textContent=(savedConnections[source]?'Use ':'Connect ')+sourceName(source)+' →';
+  }
 });
-$('#disconnect').addEventListener('click',async()=>{try{await api('/api/disconnect',{});generation++;connected=false;demo=false;boards=[];$('#workspace').replaceChildren(node('option','','Connect Trello …'));$('#connection-label').textContent='Local · read-only';$('#disconnect').hidden=true;notice('Local connection removed.');renderPicker();render();}catch(error){$('#setup-error').textContent=error.message;$('#setup-error').hidden=false;}});
-$('#demo').addEventListener('click',()=>{generation++;demo=true;loading=false;boards=makeDemo();$('#workspace').replaceChildren(node('option','','Sample · Project team'));$('#setup').close();$('#connection-label').textContent='Sample data · local preview';$('#footer-hint').textContent='Sample data · cards are not linked to Trello';notice('Previewing sample data. Use “Connection” to load your Trello boards.');anchor=today-7;renderPicker();render();});
+$('#disconnect').addEventListener('click',async()=>{
+  const source=$('#connection-provider').value;
+  connectionBusy(true);
+  try {
+    setConnectionStatus(await api('/api/disconnect',{provider:source}));
+    updateSetup(true);
+    if(source===provider&&!demo){
+      const other=source==='trello'?'planka':'trello';
+      await useProvider(savedConnections[other]?other:source);
+    }
+  }catch(error){connectionError(error);}
+  finally{connectionBusy(false);}
+});
+$('#demo').addEventListener('click',()=>{
+  generation++;demo=true;loading=false;boards=makeDemo();
+  $('#workspace').replaceChildren(node('option','','Sample · Project team'));$('#workspace').disabled=true;
+  $('#setup').close();$('#connection-label').textContent='Sample data · local preview';
+  $('#footer-hint').textContent='Sample data · cards are not linked';notice('Previewing sample data. Use “Connection” to load your boards.');
+  anchor=today-7;renderPicker();render();
+});
 function updateNowLine() {
   const now=new Date(),day=dayNumber(now);
   // Only rebuild the calendar at midnight; ordinary ticks preserve the DOM and scroll position.
@@ -456,9 +547,14 @@ function updateNowLine() {
 }
 setInterval(updateNowLine,60_000);
 new ResizeObserver(renderMinimapAnnotations).observe($('#minimap-plot'));
-window.addEventListener('trello-roadmap-settings',event=>{classification=event.detail.classification||defaultClassification();render();});
+window.addEventListener('kanban-roadmapper-settings',event=>{classification=event.detail.classification||defaultClassification();render();});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)updateNowLine();});
 window.addEventListener('focus',updateNowLine);
 render();
 updateNowLine();
-try{const status=await api('/api/status');connected=status.connected;if(connected){$('#connection-label').textContent='Trello connected · read-only';await loadWorkspaces();}else setup();}catch(error){notice(error.message,true);}
+try{
+  setConnectionStatus(await api('/api/status'));
+  const other=provider==='planka'?'trello':'planka';
+  if(savedConnections[provider]||savedConnections[other])await useProvider(savedConnections[provider]?provider:other);
+  else setup();
+}catch(error){notice(error.message,true);}

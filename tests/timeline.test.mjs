@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {dayNumber,interval,packCards,safeTrelloUrl,isDeadline,deadlineDay,placeEntries,memberDisplayName,timePosition,timedInterval,cardGeometry,deadlinePosition,minimapLayout,isBlocker,blockerInterval,markerLabelLayout,defaultClassification,cardKind,isSprint} from '../public/timeline.mjs';
+import {dayNumber,interval,packCards,safeTrelloUrl,safePlankaUrl,isDeadline,deadlineDay,placeEntries,memberDisplayName,timePosition,timedInterval,cardGeometry,deadlinePosition,minimapLayout,isBlocker,blockerInterval,markerLabelLayout,defaultClassification,cardKind,isSprint} from '../public/timeline.mjs';
 test('undated cards disappear; due-only cards occupy one day',()=>{
   assert.equal(interval({}),null);
   const due='2026-10-19T12:00:00';const day=dayNumber(due);
@@ -165,4 +165,13 @@ test('consecutive timed sprints share a row even at minimap scale; overlapping o
   assert.deepEqual(placeEntries(entries,0).entries.map(item=>item.lane),[0,0]);
   const overlap=minimapLayout([{id:'b',cards:[cards[0],sprint('overlap','2026-11-02T00:00:00','2026-11-16T12:00:00')]}],{},start,end);
   assert.deepEqual(placeEntries(overlap.sprints.map(item=>({...item,left:item.left*500,width:item.width*500,height:20})),0).entries.map(item=>item.lane),[0,1]);
+});
+
+test('Planka card links stay on the configured server and base path',()=>{
+  const base='https://boards.example.com/planka';
+  assert.equal(safePlankaUrl(base+'/cards/123',base),base+'/cards/123');
+  for(const url of ['https://elsewhere.example/planka/cards/123', 'https://boards.example.com/cards/123',
+    base+'/cards/123/extra',base+'/cards/123?token=oops','https://user@boards.example.com/planka/cards/123','javascript:alert(1)']){
+    assert.equal(safePlankaUrl(url,base),null);
+  }
 });

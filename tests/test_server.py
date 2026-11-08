@@ -57,7 +57,7 @@ class ServerTests(unittest.TestCase):
         root = f'http://127.0.0.1:{http.server_port}'
         try:
             with urlopen(root) as response:
-                self.assertIn(b'Trello Roadmap', response.read())
+                self.assertIn(b'Kanban Roadmapper', response.read())
             request = Request(root + '/api/connect', data=b'{}', headers={'Origin': 'https://example.com', 'X-Roadmap-Request': '1'})
             with self.assertRaises(HTTPError) as error:
                 urlopen(request)
@@ -66,13 +66,13 @@ class ServerTests(unittest.TestCase):
                 urlopen(root + '/.local/connection.bin')
             self.assertEqual(error.exception.code, 404)
             with tempfile.TemporaryDirectory() as temporary:
-                with patch.object(server, 'SECRET', Path(temporary) / 'secret.bin'), patch.object(server, 'trello', return_value={'id':'test'}):
+                with patch.object(server, 'SECRET', Path(temporary) / 'secret.bin'), patch.object(server, 'PLANKA_SECRET', Path(temporary) / 'planka.bin'), patch.object(server, 'trello', return_value={'id':'test'}):
                     request = Request(root+'/api/connect', data=json.dumps({'key':'a'*32,'token':'b'*64}).encode(), headers={'X-Roadmap-Request':'1','Content-Type':'application/json'})
                     with urlopen(request) as response:
                         self.assertTrue(json.load(response)['connected'])
                     self.assertEqual(server.credentials()['token'],'b'*64)
                     with urlopen(root+'/api/status') as response:
-                        self.assertEqual(json.load(response),{'connected':True})
+                        self.assertEqual(json.load(response),{'connected':True,'providers':{'trello':True,'planka':False},'plankaUrl':''})
                     request = Request(root+'/api/disconnect', data=b'{}', headers={'X-Roadmap-Request':'1'})
                     with urlopen(request) as response:
                         self.assertFalse(json.load(response)['connected'])

@@ -34,7 +34,7 @@ async function loadVersion(){
   find('#repository-branch').value=info.settings.branch;
   const classification=info.settings.classification||defaultClassification();
   showClassification(classification);
-  window.dispatchEvent(new CustomEvent('trello-roadmap-settings',{detail:{classification}}));
+  window.dispatchEvent(new CustomEvent('kanban-roadmapper-settings',{detail:{classification}}));
   find('#build-details').textContent=`Git ${info.commit?.slice(0,12)||'unavailable'}${info.dirty?' · local changes':''}. Build date: ${date}.`;
 }
 async function checkUpdates(force=false){

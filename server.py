@@ -1,4 +1,4 @@
-"""Local, read-only Trello roadmap. Python 3.11+, no packages required."""
+"""Kanban Roadmapper: a local, read-only roadmap. Python 3.11+, no packages required."""
 import ctypes
 from ctypes import wintypes
 import json
@@ -13,10 +13,12 @@ from urllib.parse import urlencode, urlsplit, parse_qs
 from urllib.request import Request, urlopen
 import webbrowser
 import argparse
+import planka
 import versioning
 
 ROOT = Path(__file__).resolve().parent
 SECRET = ROOT / '.local' / 'connection.bin'
+PLANKA_SECRET = ROOT / '.local' / 'planka.bin'
 LOCK = threading.Lock()
 
 
@@ -40,11 +42,40 @@ def protect(data, decrypt=False):
         ctypes.windll.kernel32.LocalFree(target.data)
 
 
-def credentials():
+def read_credentials(path, name):
     with LOCK:
-        if not SECRET.exists():
-            raise ValueError('Connect Trello first.')
-        return json.loads(protect(SECRET.read_bytes(), True))
+        if not path.exists():
+            raise ValueError(f'Connect {name} first.')
+        return json.loads(protect(path.read_bytes(), True))
+
+
+def credentials():
+    return read_credentials(SECRET, 'Trello')
+
+
+def save_credentials(path, auth):
+    with LOCK:
+        path.parent.mkdir(exist_ok=True)
+        temporary = path.with_suffix('.tmp')
+        temporary.write_bytes(protect(json.dumps(auth).encode()))
+        os.replace(temporary, path)
+
+
+def connection_status():
+    planka_url = ''
+    if PLANKA_SECRET.exists():
+        try:
+            planka_url = read_credentials(PLANKA_SECRET, 'Planka')['url']
+        except (KeyError, TypeError, ValueError, OSError):
+            pass  # A damaged Planka connection must not prevent Trello startup.
+    providers = {'trello': SECRET.exists(), 'planka': PLANKA_SECRET.exists()}
+    return {'connected': any(providers.values()), 'providers': providers, 'plankaUrl': planka_url}
+
+
+def provider_name(value):
+    if value not in ('trello', 'planka'):
+        raise ValueError('Choose Trello or Planka.')
+    return value
 
 
 def trello(path, params=None, auth=None):
@@ -71,6 +102,7 @@ def roadmap(workspace):
         lists = trello(f'boards/{board_id}/lists', {'filter': 'all', 'fields': 'name'})
         members = trello(f'boards/{board_id}/members', {'fields': 'fullName,initials,username'})
         cards = trello(f'boards/{board_id}/cards', {'filter': 'open', 'fields': 'name,start,due,dueComplete,idList,idMembers,url,closed,labels'})
+        cards = [card for card in cards if 'template' not in (card.get('name') or '').casefold()]
         return {**board, 'lists': lists, 'members': members, 'cards': cards}
 
     # Do not silently present incomplete data if one board fails.
@@ -94,7 +126,7 @@ class Handler(SimpleHTTPRequestHandler):
         super().__init__(*args, directory=str(ROOT / 'public'), **kwargs)
 
     def log_message(self, *_):
-        pass  # Never log request bodies or Trello credentials.
+        pass  # Never log request bodies or credentials.
 
     def end_headers(self):
         self.send_header('Cache-Control', 'no-store')
@@ -121,15 +153,25 @@ class Handler(SimpleHTTPRequestHandler):
         parsed = urlsplit(self.path)
         try:
             if parsed.path == '/api/status':
-                return self.reply({'connected': SECRET.exists()})
+                return self.reply(connection_status())
             if parsed.path == '/api/version':
                 return self.reply(versioning.build_info(ROOT))
             if parsed.path == '/api/updates':
                 return self.reply(versioning.check_updates(ROOT, parse_qs(parsed.query).get('force') == ['1']))
-            if parsed.path == '/api/workspaces':
-                return self.reply(trello('members/me/organizations', {'fields': 'displayName,name'}))
-            if parsed.path == '/api/roadmap':
-                return self.reply(roadmap(parse_qs(parsed.query).get('workspace', [''])[0]))
+            if parsed.path in ('/api/workspaces', '/api/roadmap'):
+                query = parse_qs(parsed.query)
+                provider = provider_name(query.get('provider', ['trello'])[0])
+                workspace = query.get('workspace', [''])[0]
+                if provider == 'planka':
+                    auth = read_credentials(PLANKA_SECRET, 'Planka')
+                    try:
+                        return self.reply(planka.projects(auth) if parsed.path == '/api/workspaces'
+                                          else planka.roadmap(auth, workspace))
+                    except (KeyError, TypeError, AttributeError):
+                        raise ValueError('Unexpected Planka API response. Check that the server is running Planka v2.') from None
+                if parsed.path == '/api/workspaces':
+                    return self.reply(trello('members/me/organizations', {'fields': 'displayName,name'}))
+                return self.reply(roadmap(workspace))
             if parsed.path.startswith('/api/'):
                 return self.reply({'error': 'Not found.'}, 404)
             if parsed.path not in ('/', '/index.html', '/app.js', '/updates.js', '/timeline.mjs', '/style.css'):
@@ -154,20 +196,25 @@ class Handler(SimpleHTTPRequestHandler):
             if self.path == '/api/settings':
                 return self.reply(versioning.save_settings(ROOT, body))
             if self.path == '/api/connect':
-                auth = {name: str(body.get(name, '')).strip() for name in ('key', 'token')}
-                if not re.fullmatch(r'[a-fA-F0-9]{32}', auth['key']) or not re.fullmatch(r'[a-zA-Z0-9]{32,256}', auth['token']):
-                    raise ValueError('Enter a valid Trello API key and token.')
-                trello('members/me', {'fields': 'id'}, auth)
-                with LOCK:
-                    SECRET.parent.mkdir(exist_ok=True)
-                    temporary = SECRET.with_suffix('.tmp')
-                    temporary.write_bytes(protect(json.dumps(auth).encode()))
-                    os.replace(temporary, SECRET)
-                return self.reply({'connected': True})
+                provider = provider_name(body.get('provider', 'trello'))
+                if provider == 'planka':
+                    auth = {'url': planka.base_url(body.get('url', '')), 'key': str(body.get('key', '')).strip()}
+                    if not re.fullmatch(r'[!-~]{1,512}', auth['key']):
+                        raise ValueError('Enter a valid Planka API key.')
+                    planka.projects(auth)
+                    save_credentials(PLANKA_SECRET, auth)
+                else:
+                    auth = {name: str(body.get(name, '')).strip() for name in ('key', 'token')}
+                    if not re.fullmatch(r'[a-fA-F0-9]{32}', auth['key']) or not re.fullmatch(r'[a-zA-Z0-9]{32,256}', auth['token']):
+                        raise ValueError('Enter a valid Trello API key and token.')
+                    trello('members/me', {'fields': 'id'}, auth)
+                    save_credentials(SECRET, auth)
+                return self.reply(connection_status())
             if self.path == '/api/disconnect':
+                provider = provider_name(body.get('provider', 'trello'))
                 with LOCK:
-                    SECRET.unlink(missing_ok=True)
-                return self.reply({'connected': False})
+                    (PLANKA_SECRET if provider == 'planka' else SECRET).unlink(missing_ok=True)
+                return self.reply(connection_status())
             return self.reply({'error': 'Not found.'}, 404)
         except (ValueError, OSError) as error:
             return self.reply({'error': str(error)}, 400)
@@ -179,7 +226,7 @@ if __name__ == '__main__':
     parser.add_argument('--no-browser', action='store_true')
     args = parser.parse_args()
     server = ThreadingHTTPServer(('127.0.0.1', args.port), Handler)
-    print(f'Roadmap is running at http://127.0.0.1:{args.port}', flush=True)
+    print(f'Kanban Roadmapper is running at http://127.0.0.1:{args.port}', flush=True)
     if not args.no_browser:
         webbrowser.open(f'http://127.0.0.1:{args.port}')
     try:

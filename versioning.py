@@ -105,7 +105,7 @@ def check_with_git(root, settings, local_commit):
         return None
     if ahead == 0:
         return {**result, 'status': 'ahead', 'available': True,
-                'message': 'A newer version is available on GitHub. Pull or re-clone the repository, then restart Trello Roadmap.'}
+                'message': 'A newer version is available on GitHub. Pull or re-clone the repository, then restart Kanban Roadmapper.'}
     return {**result, 'status': 'behind' if behind == 0 else 'diverged', 'available': False,
             'message': 'This checkout contains local commits ahead of GitHub.' if behind == 0 else 'Local and GitHub history have diverged. Review your checkout before updating.'}
 def read_settings(root):
@@ -144,7 +144,7 @@ def save_settings(root, body):
 
 def build_info(root):
     # Hash executable source only: no credentials, browser settings, or personal data.
-    paths = [root / name for name in ('server.py', 'versioning.py', 'Start-Roadmap.cmd')]
+    paths = [root / name for name in ('server.py', 'planka.py', 'versioning.py', 'Start-Roadmap.cmd')]
     paths += sorted((root / 'public').glob('*'))
     digest = hashlib.sha256()
     for path in paths:
@@ -172,7 +172,7 @@ def build_info(root):
 
 def github(path):
     request = Request('https://api.github.com/' + path, headers={
-        'Accept': 'application/vnd.github+json', 'User-Agent': 'TrelloRoadmap',
+        'Accept': 'application/vnd.github+json', 'User-Agent': 'KanbanRoadmapper',
         'X-GitHub-Api-Version': '2022-11-28'})
     # Never reuse the user's Trello token for a different service.
     with urlopen(request, timeout=12) as response:
@@ -205,7 +205,7 @@ def check_updates(root, force=False):
             state = comparison['status']
             result.update(status=state, available=state == 'ahead' and comparison.get('ahead_by', 0) > 0)
             result['message'] = {
-                'ahead': 'A newer version is available on GitHub. Pull or re-clone the repository, then restart Trello Roadmap.',
+                'ahead': 'A newer version is available on GitHub. Pull or re-clone the repository, then restart Kanban Roadmapper.',
                 'behind': 'This checkout contains local commits ahead of GitHub.',
                 'diverged': 'Local and GitHub history have diverged. Review your checkout before updating.',
                 'identical': 'This checkout is up to date with GitHub.',

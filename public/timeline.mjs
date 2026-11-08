@@ -61,6 +61,16 @@ export function safeTrelloUrl(value) {
   catch { return null; }
 }
 
+export function safePlankaUrl(value, base) {
+  try {
+    const url = new URL(value), server = new URL(base);
+    const path = server.pathname.replace(/\/$/, '') + '/cards/';
+    return ['https:', 'http:'].includes(url.protocol) && url.origin === server.origin &&
+      !url.username && !url.password && !url.search && !url.hash &&
+      url.pathname.startsWith(path) && /^[0-9]+$/.test(url.pathname.slice(path.length)) ? url.href : null;
+  } catch { return null; }
+}
+
 export function defaultClassification(){
   return {deadline:{labels:['Deadline'],lists:[],titlePrefixes:['Deadline']},
     blocker:{labels:['Blocker'],lists:[],titlePrefixes:[]},
